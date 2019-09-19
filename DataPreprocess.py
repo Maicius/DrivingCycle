@@ -1,6 +1,7 @@
 import pandas as pd
 import time
 import numpy as np
+from sklearn.decomposition import PCA
 
 class DataProcess(object):
     raw_pre = 'raw_data/'
@@ -170,11 +171,31 @@ class DataProcess(object):
         move_data = pd.read_csv(self.mid_pre + "move_step.csv")
 
         move_feature = move_feature.sort_values(by='total_time', ascending=False)
-        top_move_feature = move_feature.head(10)['movement']
+        move_feature = move_feature.loc[:600,:]
+        top_move_feature = move_feature.sample(n=10)['movement']
         move_data = move_data.loc[move_data.movement.isin(top_move_feature), ['movement', 'gps_v']]
+        move_data2 = move_data.groupby('movement')
+        movement_id = move_data2.movement.indices.keys()
+        new_data = pd.DataFrame()
+        for move_id in movement_id:
+            data = move_data2.get_group(move_id)
+            data = data.reset_index().reset_index()
+            if new_data.empty:
+                new_data = data
+            else:
+                new_data = pd.concat([new_data, data])
+        new_data.drop(['index'], inplace=True, axis=1)
+        new_data.to_excel(self.mid_pre + "top_k_move_step.xlsx", index=False)
 
-        move_data.to_excel(self.mid_pre + "top_k_move_step.xlsx")
+    def do_pca(self):
+        self.pca = PCA(n_components=10)
+        move_feature = pd.read_csv(self.mid_pre + "move_feature.csv")
+        move_feature.drop(['movement'], axis=1, inplace=True)
+        self.pca.fit(move_feature)
+        new_feature = self.pca.transform(X=move_feature)
+        pass
 
 if __name__ == "__main__":
     dp = DataProcess()
-    dp.get_top_k_movement()
+    # dp.get_top_k_movement()
+    dp.do_pca()
