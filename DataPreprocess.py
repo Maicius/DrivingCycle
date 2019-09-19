@@ -10,12 +10,6 @@ class DataProcess(object):
         pass
 
     def load_data(self):
-        # self.data1 = pd.read_excel(self.raw_pre + "1.xlsx")
-        # self.data2 = pd.read_excel(self.raw_pre + "2.xlsx")
-        # self.data3 = pd.read_excel(self.raw_pre + "3.xlsx")
-        # self.data1.to_csv(self.raw_pre + "1.csv")
-        # self.data2.to_csv(self.raw_pre + "2.csv")
-        # self.data3.to_csv(self.raw_pre + "3.csv")
 
         self.data1 = pd.read_csv(self.raw_pre + "1.csv")
         self.data1.columns = ['order', 'time', 'gps_v', 'x', 'y', 'z', 'longitude', 'latitude', 'engine',
@@ -74,6 +68,13 @@ class DataProcess(object):
         print("去除怠速之后：", data.shape)
         return data
 
+    def change_data_format(self):
+        self.data1 = pd.read_excel(self.raw_pre + "1.xlsx")
+        self.data2 = pd.read_excel(self.raw_pre + "2.xlsx")
+        self.data3 = pd.read_excel(self.raw_pre + "3.xlsx")
+        self.data1.to_csv(self.raw_pre + "1.csv")
+        self.data2.to_csv(self.raw_pre + "2.csv")
+        self.data3.to_csv(self.raw_pre + "3.csv")
 
     def main(self):
         self.load_data()
