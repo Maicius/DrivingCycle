@@ -6,8 +6,9 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 from sklearn import metrics, cross_validation, ensemble
 from sklearn.preprocessing import scale, minmax_scale
-
+import json
 from sklearn.linear_model import Ridge
+
 
 class DataProcess(object):
     raw_pre = 'raw_data/'
@@ -17,6 +18,7 @@ class DataProcess(object):
     MOVE_TIME = 900
     FINAL_MOVEMENT = []
     miss_index = []
+
     def __init__(self):
         pass
 
@@ -30,20 +32,22 @@ class DataProcess(object):
 
     def get_complete_true_movement(self, data):
         miss_movement = data.loc[data.order.isin(self.miss_index), 'movement']
-        print(len(miss_movement))
+        print("有异常的运动学片段：", len(set(miss_movement)))
         miss_data = data.loc[data.movement.isin(miss_movement)]
         miss_data.to_csv(self.mid_pre + "miss_data.csv")
         data.drop(data.loc[data.movement.isin(miss_movement)].index, inplace=True)
-        print("完整的运动片段:", data.shape)
+        print("完整的运动片段:", len(set(data.movement.values)))
         data.to_csv(self.mid_pre + "complete.csv")
+        miss_index_df = pd.DataFrame(self.miss_index)
+        miss_index_df.to_csv(self.mid_pre + "miss_index_df.csv", index=False)
 
     def load_data(self):
 
-        self.data1 = pd.read_csv(self.raw_pre + "1.csv")
+        self.data1 = pd.read_csv(self.raw_pre + "new1.csv")
         self.data1.columns = ['order', 'time', 'gps_v', 'x', 'y', 'z', 'longitude', 'latitude', 'engine',
-                              'torque', 'fuel', 'accelerator', 'air', 'engine_load', 'flow']
-        # self.data2 = pd.read_csv(self.raw_pre + "2.csv")
-        # self.data3 = pd.read_csv(self.raw_pre + "3.csv")
+                              'torque', 'fuel', 'accelerator', 'air', 'engine_load', 'flow', 'a']
+        # self.data2 = pd.read_csv(self.raw_pre + "new2.csv")
+        # self.data3 = pd.read_csv(self.raw_pre + "new3.csv")
         self.data1['time'] = self.data1['time'].apply(lambda x: pd.to_datetime(x[:-4]))
         # self.data2['时间'] = self.data2['时间'].apply(lambda x: pd.to_datetime(x[:-4]))
         # self.data3['时间'] = self.data3['时间'].apply(lambda x: pd.to_datetime(x[:-4]))
@@ -64,36 +68,132 @@ class DataProcess(object):
         v_data2.drop(['index'], axis=1, inplace=True)
         v_data3 = pd.concat([v_data, v_data2], axis=1)
 
-
         v_data3['time_step'] = (v_data3['time'] - v_data3['time2'])
         time_split_index = v_data3.loc[v_data3['time_step'] >= 180, 'index']
         self.miss_index = v_data3.loc[(v_data3['time_step'] > 1) & (v_data3['time_step'] < 180), 'index']
+        print(len(self.miss_index))
         v_data3['time_split'] = 0
         v_data3.loc[v_data3.index.isin(time_split_index), 'time_split'] = 1
 
         # v_data3 = v_data3.loc[v_data3['time_step'] <= 1, :]
 
-
         print("去除不连续值:", v_data3.shape)
         # 计算加速度
         v_data3['acc'] = (v_data3['gps_v'] - v_data3['gps_v2']) / (v_data3['time_step'] * 3.6)
-        max_acc = 100 / 7
+        max_acc = 100 / (7 * 3.6)
         min_acc = -8
         # print(v_data3.shape)
         print("去除异常加速度之前:", data.shape)
-        v_data3 = v_data3.loc[(v_data3['acc'] < max_acc) & (v_data3['acc'] > min_acc)]
-        self.miss_index += v_data3.iloc[:, 0]
+        miss_v_data3 = v_data3.loc[(v_data3['acc'] > max_acc) | (v_data3['acc'] < min_acc)]
+
+        self.miss_index = self.miss_index.append(miss_v_data3.iloc[:, 0])
+        # v_data3 = v_data3.loc[(v_data3['acc'] <= max_acc) & (v_data3['acc'] >= min_acc)]
         # data = data.loc[data.order.isin(v_data3.iloc[:, 0])]
         # data['acc'] = v_data3['acc']
         # print("去除异常加速度之后：", v_data3.shape)
+        print(v_data3.shape, data.shape)
         data['time_split'] = v_data3['time_split']
+        data['time_step'] = v_data3['time_step']
         # print(self.miss_index)
         return data
+
+    def find_knn_movement(self):
+        miss_data = pd.read_csv(self.mid_pre + "miss_data.csv")
+        miss_index = pd.read_csv(self.mid_pre + "miss_index_df.csv")
+        miss_data['abnormal'] = 0
+        miss_data_group = miss_data.groupby("movement")
+        movement_ids = miss_data_group.movement.indices.keys()
+        new_miss_move_list = []
+        for movement_id in movement_ids:
+            miss_move = miss_data_group.get_group(movement_id)
+            shape = miss_move.shape[0]
+            miss_move_list = miss_move.to_dict(orient='records')
+            new_miss_move_list.append(miss_move_list[0])
+            for i in range(1, shape):
+                step = miss_move_list[i]['time'] - miss_move_list[i - 1]['time']
+                if step > 1:
+                    begin_time = miss_move_list[i - 1]['time'] + 1
+                    for j in range(int(step) - 1):
+                        new_miss_move_list.append(dict(time=begin_time, abnormal=1, movement=movement_id))
+                        begin_time += 1
+                new_miss_move_list.append(miss_move_list[i])
+        new_miss_move_df = pd.DataFrame(new_miss_move_list)
+        new_miss_move_df.fillna(0, inplace=True)
+        new_miss_move_df.loc[miss_data.index.isin(miss_index['index']), 'abnormal'] = 1
+
+        complete_data = pd.read_csv(self.mid_pre + "complete.csv")
+        data_group = complete_data.groupby('movement')
+        com_movement_id = data_group.movement.indices.keys()
+        columns = ['gps_v', 'engine', 'torque', 'fuel', 'accelerator', 'air', 'engine_load', 'flow', 'a']
+
+        com_shape_list = []
+        for com_id in com_movement_id:
+            df = data_group.get_group(com_id)
+            shape = df.shape[0]
+            com_shape_list.append(dict(length=shape, movement_id=com_id))
+        com_shape_list = sorted(com_shape_list, key=lambda x: x['length'], reverse=True)
+
+        new_miss_move_group = new_miss_move_df.groupby("movement")
+
+        result_dict = []
+        movement_ids = miss_data_group.movement.indices.keys()
+
+        for miss_move_id in movement_ids:
+            try:
+                print("---------------------------")
+                print("begin:", miss_move_id)
+                move_df = new_miss_move_group.get_group(miss_move_id).reset_index()
+                all_length = move_df.shape[0]
+                abnormal_index = move_df.loc[move_df['abnormal'] == 1,:].index
+                max_index = max(abnormal_index)
+                min_index = min(abnormal_index)
+                print("缺失值长度:", len(abnormal_index))
+                half_window = 50
+                max_index = min(max_index + half_window, all_length)
+                min_index = max(min_index - half_window, 0)
+                move_df = move_df.iloc[min_index: max_index, :]
+                move_df = move_df.loc[:, columns]
+                count = 0
+                length = move_df.shape[0]
+                print(move_df.shape)
+                for com in com_shape_list:
+                    print(count)
+                    if com['length'] <= length or count >= 200:
+                        print("异常的data df 较长")
+                        break
+                    else:
+                        # print(count)
+                        compare_data = data_group.get_group(com['movement_id'])
+                        error_list = []
+                        for i in range(0, com['length'] - length):
+                            slide_window_df = compare_data.iloc[i: i + length, :]
+                            slide_window_df = slide_window_df.loc[:, columns]
+
+                            compare_error = pd.DataFrame(
+                                np.subtract(minmax_scale(slide_window_df.values), minmax_scale(move_df.values)))
+                            compare_error = compare_error.apply(lambda x: x ** 2)
+                            compare_error['sum_val'] = compare_error.sum(axis=1)
+                            compare_error['sum_val'] = np.sqrt(compare_error['sum_val'])
+                            result_error = compare_error['sum_val'].sum()
+                            error_list.append(dict(result_error=result_error, begin=i, end=i + length))
+                        if len(error_list) > 0:
+                            min_error = sorted(error_list, key=lambda x: x['result_error'], reverse=False)[0]
+                            result_dict.append(
+                                dict(error=min_error['result_error'], miss_id=miss_move_id, com_id=com['movement_id'],
+                                    begin=min_error['begin'], end_index=min_error['end']))
+                        count += 1
+                print(count)
+                with open(self.mid_pre + "knn_result.json", 'w+', encoding='utf-8') as w:
+                    json.dump(result_dict, w)
+            except BaseException as e:
+                print(e)
+
 
     def predict_speed_for_abnormal(self):
         data = pd.read_csv(self.mid_pre + "complete.csv")
         data_group = data.groupby('movement')
         movement_id = data_group.movement.indices.keys()
+
         new_data = pd.DataFrame()
         for move_id in movement_id:
             move = data_group.get_group(move_id).loc[:, ['gps_v']]
@@ -108,12 +208,12 @@ class DataProcess(object):
         model = Ridge(alpha=best_alpha)
         self.clf = ensemble.BaggingRegressor(model, n_jobs=1, n_estimators=900)
         print("交叉验证...")
-        scores = cross_validation.cross_val_score(model, new_data['X'].reshape(-1, 1), new_data['Y'].reshape(-1, 1), cv=10, scoring='neg_mean_squared_error')
+        scores = cross_validation.cross_val_score(model, new_data['X'].reshape(-1, 1), new_data['Y'].reshape(-1, 1),
+                                                  cv=10, scoring='neg_mean_squared_error')
         print(scores)
         print("mean:" + str(scores.mean()))
 
         pass
-
 
     # 找到Ridge最佳的正则值
     def find_min_alpha(self, x_train, y_train):
@@ -157,12 +257,12 @@ class DataProcess(object):
         return data
 
     def change_data_format(self):
-        self.data1 = pd.read_excel(self.raw_pre + "1.xlsx")
-        self.data2 = pd.read_excel(self.raw_pre + "2.xlsx")
-        self.data3 = pd.read_excel(self.raw_pre + "3.xlsx")
-        self.data1.to_csv(self.raw_pre + "1.csv")
-        self.data2.to_csv(self.raw_pre + "2.csv")
-        self.data3.to_csv(self.raw_pre + "3.csv")
+        self.data1 = pd.read_excel(self.raw_pre + "new1.xlsx")
+        self.data2 = pd.read_excel(self.raw_pre + "new2.xlsx")
+        self.data3 = pd.read_excel(self.raw_pre + "new3.xlsx")
+        self.data1.to_csv(self.raw_pre + "new1.csv")
+        self.data2.to_csv(self.raw_pre + "new2.csv")
+        self.data3.to_csv(self.raw_pre + "new3.csv")
 
     def find_movement_state(self, data):
         """
@@ -170,7 +270,6 @@ class DataProcess(object):
         :param data:
         :return:
         """
-        index = 0
         flag = False
         movement_state = 1
         movement_list = []
@@ -185,7 +284,6 @@ class DataProcess(object):
                 elif row.gps_v != 0:
                     flag = True
             movement_list.append(movement_state)
-            index += 1
         data['movement'] = movement_list
         return data
 
@@ -317,7 +415,7 @@ class DataProcess(object):
             cluster_total_time = cluster.loc[:, 'total_time'].sum()
 
             time_ratio = cluster_total_time / all_move_time
-            print(clu,"运行时间占比：", time_ratio)
+            print(clu, "运行时间占比：", time_ratio)
 
             other_list = []
             cluster_combine_feature = pd.concat([cluster_mean, cluster_max, cluster_min])
@@ -346,7 +444,7 @@ class DataProcess(object):
             all_corr_list += corr_list
         corr_df = pd.DataFrame(all_corr_list)
         corr_df.to_csv(self.mid_pre + "corr.csv", index=False)
-        actual_total_time = sum(map(lambda x:x['time'], self.FINAL_MOVEMENT))
+        actual_total_time = sum(map(lambda x: x['time'], self.FINAL_MOVEMENT))
         final_movement_id = list(map(lambda x: x['movement'], self.FINAL_MOVEMENT))
         print(self.FINAL_MOVEMENT)
         move_data = pd.read_csv(self.mid_pre + "move_step.csv")
@@ -358,7 +456,9 @@ class DataProcess(object):
 
 if __name__ == "__main__":
     dp = DataProcess()
-    dp.main()
+    # dp.change_data_format()
+    # dp.main()
+    dp.find_knn_movement()
     # dp.predict_speed_for_abnormal()
     # dp.get_top_k_movement()
     # dp.do_pca()
